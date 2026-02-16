@@ -1,0 +1,272 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: '340B Master Stack - Orchestrates all modules for Dev/QA/Prod'
+
+Parameters:
+  Environment:
+    Type: String
+    AllowedValues: [dev, qa, prod]
+    Description: Target environment
+  Region:
+    Type: String
+    Default: us-west-1
+    Description: AWS Region
+  NamingPrefix:
+    Type: String
+    Default: 340b
+    Description: Naming prefix for all resources
+  # Network parameters
+  VPCCidr:
+    Type: String
+    Default: 10.0.0.0/16
+    Description: VPC CIDR block
+  PublicSubnet1Cidr:
+    Type: String
+    Default: 10.0.1.0/24
+  PublicSubnet2Cidr:
+    Type: String
+    Default: 10.0.2.0/24
+  PrivateSubnet1Cidr:
+    Type: String
+    Default: 10.0.10.0/24
+  PrivateSubnet2Cidr:
+    Type: String
+    Default: 10.0.11.0/24
+  AvailabilityZone1:
+    Type: String
+    Default: us-west-1a
+  AvailabilityZone2:
+    Type: String
+    Default: us-west-1b
+  FlowLogRetentionDays:
+    Type: Number
+    Default: 14
+  # Compute parameters
+  InstanceType:
+    Type: String
+    Default: t3.micro
+  MinSize:
+    Type: Number
+    Default: 2
+  MaxSize:
+    Type: Number
+    Default: 4
+  DesiredCapacity:
+    Type: Number
+    Default: 2
+  KeyName:
+    Type: String
+    Default: ''
+  # Optional - DNS/ACM (leave empty to skip)
+  DomainName:
+    Type: String
+    Default: ''
+  CertificateArn:
+    Type: String
+    Default: ''
+  AlarmEmail:
+    Type: String
+    Default: ''
+  TgwRouteDestinationCidr:
+    Type: String
+    Default: ''
+  TemplateBucket:
+    Type: String
+    Description: S3 bucket containing CloudFormation templates
+  TemplatePrefix:
+    Type: String
+    Default: '340b-templates'
+    Description: S3 prefix/folder for templates
+
+Conditions:
+  CreateDNS: !Not [!Equals [!Ref DomainName, '']]
+  UseCertificate: !Not [!Equals [!Ref CertificateArn, '']]
+  CreateAlarms: !Not [!Equals [!Ref AlarmEmail, '']]
+  HasTgwRoute: !Not [!Equals [!Ref TgwRouteDestinationCidr, '']]
+
+Resources:
+  # 1. Network Stack
+  NetworkStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub 'https://${TemplateBucket}.s3.${AWS::Region}.amazonaws.com/${TemplatePrefix}/modules/network/vpc.yaml'
+      Parameters:
+        Environment: !Ref Environment
+        Region: !Ref Region
+        NamingPrefix: !Ref NamingPrefix
+        VPCCidr: !Ref VPCCidr
+        PublicSubnet1Cidr: !Ref PublicSubnet1Cidr
+        PublicSubnet2Cidr: !Ref PublicSubnet2Cidr
+        PrivateSubnet1Cidr: !Ref PrivateSubnet1Cidr
+        PrivateSubnet2Cidr: !Ref PrivateSubnet2Cidr
+        AvailabilityZone1: !Ref AvailabilityZone1
+        AvailabilityZone2: !Ref AvailabilityZone2
+        FlowLogRetentionDays: !Ref FlowLogRetentionDays
+
+  # 2. Security - KMS Stack
+  KMSStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub 'https://${TemplateBucket}.s3.${AWS::Region}.amazonaws.com/${TemplatePrefix}/modules/security/kms.yaml'
+      Parameters:
+        Environment: !Ref Environment
+        Region: !Ref Region
+        NamingPrefix: !Ref NamingPrefix
+
+  # 3. ACM Stack (optional - for custom domain)
+  ACMStack:
+    Type: AWS::CloudFormation::Stack
+    Condition: CreateDNS
+    Properties:
+      TemplateURL: !Sub 'https://${TemplateBucket}.s3.${AWS::Region}.amazonaws.com/${TemplatePrefix}/modules/certificates/acm.yaml'
+      Parameters:
+        Environment: !Ref Environment
+        Region: !Ref Region
+        NamingPrefix: !Ref NamingPrefix
+        DomainName: !Ref DomainName
+        ValidationMethod: DNS
+
+  # 4. Compute Stack
+  ComputeStack:
+    Type: AWS::CloudFormation::Stack
+    DependsOn:
+      - NetworkStack
+    Properties:
+      TemplateURL: !Sub 'https://${TemplateBucket}.s3.${AWS::Region}.amazonaws.com/${TemplatePrefix}/modules/compute/alb-asg.yaml'
+      Parameters:
+        Environment: !Ref Environment
+        Region: !Ref Region
+        NamingPrefix: !Ref NamingPrefix
+        InstanceType: !Ref InstanceType
+        MinSize: !Ref MinSize
+        MaxSize: !Ref MaxSize
+        DesiredCapacity: !Ref DesiredCapacity
+        KeyName: !Ref KeyName
+        VpcId: !GetAtt NetworkStack.Outputs.VpcId
+        PublicSubnet1Id: !GetAtt NetworkStack.Outputs.PublicSubnet1Id
+        PublicSubnet2Id: !GetAtt NetworkStack.Outputs.PublicSubnet2Id
+        PrivateSubnet1Id: !GetAtt NetworkStack.Outputs.PrivateSubnet1Id
+        PrivateSubnet2Id: !GetAtt NetworkStack.Outputs.PrivateSubnet2Id
+        ALBSecurityGroupId: !GetAtt NetworkStack.Outputs.ALBSecurityGroupId
+        EC2SecurityGroupId: !GetAtt NetworkStack.Outputs.EC2SecurityGroupId
+        CertificateArn: !If [UseCertificate, !Ref CertificateArn, '']
+
+  # 5. WAF Stack (requires ALB)
+  WAFStack:
+    Type: AWS::CloudFormation::Stack
+    DependsOn: ComputeStack
+    Properties:
+      TemplateURL: !Sub 'https://${TemplateBucket}.s3.${AWS::Region}.amazonaws.com/${TemplatePrefix}/modules/security/waf.yaml'
+      Parameters:
+        LoadBalancerArn: !GetAtt ComputeStack.Outputs.LoadBalancerArn
+        Environment: !Ref Environment
+        Region: !Ref Region
+        NamingPrefix: !Ref NamingPrefix
+
+  # 6. Transit Gateway Stack
+  TGWStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub 'https://${TemplateBucket}.s3.${AWS::Region}.amazonaws.com/${TemplatePrefix}/modules/connectivity/transit-gateway.yaml'
+      Parameters:
+        Environment: !Ref Environment
+        Region: !Ref Region
+        NamingPrefix: !Ref NamingPrefix
+
+  # 7. TGW VPC Attachment Stack
+  TGWAttachmentStack:
+    Type: AWS::CloudFormation::Stack
+    DependsOn:
+      - NetworkStack
+      - TGWStack
+    Properties:
+      TemplateURL: !Sub 'https://${TemplateBucket}.s3.${AWS::Region}.amazonaws.com/${TemplatePrefix}/modules/connectivity/tgw-vpc-attachment.yaml'
+      Parameters:
+        Environment: !Ref Environment
+        Region: !Ref Region
+        NamingPrefix: !Ref NamingPrefix
+        TransitGatewayId: !GetAtt TGWStack.Outputs.TransitGatewayId
+        VpcId: !GetAtt NetworkStack.Outputs.VpcId
+        PrivateSubnet1Id: !GetAtt NetworkStack.Outputs.PrivateSubnet1Id
+        PrivateSubnet2Id: !GetAtt NetworkStack.Outputs.PrivateSubnet2Id
+        PrivateRouteTableId: !GetAtt NetworkStack.Outputs.PrivateRouteTableId
+        TgwRouteDestinationCidr: !Ref TgwRouteDestinationCidr
+
+  # 8. PrivateLink Stack
+  PrivateLinkStack:
+    Type: AWS::CloudFormation::Stack
+    DependsOn: NetworkStack
+    Properties:
+      TemplateURL: !Sub 'https://${TemplateBucket}.s3.${AWS::Region}.amazonaws.com/${TemplatePrefix}/modules/connectivity/privatelink.yaml'
+      Parameters:
+        Environment: !Ref Environment
+        Region: !Ref Region
+        NamingPrefix: !Ref NamingPrefix
+        VpcId: !GetAtt NetworkStack.Outputs.VpcId
+        VPCCidr: !Ref VPCCidr
+        PrivateSubnet1Id: !GetAtt NetworkStack.Outputs.PrivateSubnet1Id
+        PrivateSubnet2Id: !GetAtt NetworkStack.Outputs.PrivateSubnet2Id
+        PrivateRouteTableId: !GetAtt NetworkStack.Outputs.PrivateRouteTableId
+        EnableEndpointService: 'false'
+
+  # 9. Storage Stack
+  StorageStack:
+    Type: AWS::CloudFormation::Stack
+    DependsOn: KMSStack
+    Properties:
+      TemplateURL: !Sub 'https://${TemplateBucket}.s3.${AWS::Region}.amazonaws.com/${TemplatePrefix}/modules/storage/s3.yaml'
+      Parameters:
+        Environment: !Ref Environment
+        Region: !Ref Region
+        NamingPrefix: !Ref NamingPrefix
+        KMSKeyArn: !GetAtt KMSStack.Outputs.KMSKeyArn
+        BucketSuffix: data
+
+  # 10. Monitoring Stack
+  MonitoringStack:
+    Type: AWS::CloudFormation::Stack
+    DependsOn:
+      - ComputeStack
+      - KMSStack
+    Properties:
+      TemplateURL: !Sub 'https://${TemplateBucket}.s3.${AWS::Region}.amazonaws.com/${TemplatePrefix}/modules/monitoring/cloudwatch.yaml'
+      Parameters:
+        Environment: !Ref Environment
+        Region: !Ref Region
+        NamingPrefix: !Ref NamingPrefix
+        KMSKeyArn: !GetAtt KMSStack.Outputs.KMSKeyArn
+        LogRetentionDays: !Ref FlowLogRetentionDays
+        AlarmEmail: !Ref AlarmEmail
+        LoadBalancerArn: !GetAtt ComputeStack.Outputs.LoadBalancerArn
+        AutoScalingGroupName: !GetAtt ComputeStack.Outputs.AutoScalingGroupName
+
+  # 11. Route53 Stack (optional)
+  Route53Stack:
+    Type: AWS::CloudFormation::Stack
+    Condition: CreateDNS
+    DependsOn: ComputeStack
+    Properties:
+      TemplateURL: !Sub 'https://${TemplateBucket}.s3.${AWS::Region}.amazonaws.com/${TemplatePrefix}/modules/dns/route53.yaml'
+      Parameters:
+        Environment: !Ref Environment
+        Region: !Ref Region
+        NamingPrefix: !Ref NamingPrefix
+        DomainName: !Ref DomainName
+        CreateHostedZone: 'true'
+        LoadBalancerDNSName: !GetAtt ComputeStack.Outputs.LoadBalancerDNSName
+        LoadBalancerHostedZoneId: !GetAtt ComputeStack.Outputs.LoadBalancerHostedZoneId
+        RecordName: !Sub '${Environment}-api'
+
+Outputs:
+  VpcId:
+    Description: VPC ID
+    Value: !GetAtt NetworkStack.Outputs.VpcId
+  LoadBalancerDNSName:
+    Description: ALB DNS name
+    Value: !GetAtt ComputeStack.Outputs.LoadBalancerDNSName
+  LoadBalancerUrl:
+    Description: ALB URL
+    Value: !Sub ['http://${DNS}', {DNS: !GetAtt ComputeStack.Outputs.LoadBalancerDNSName}]
+  ApiRecordName:
+    Condition: CreateDNS
+    Description: API DNS record
+    Value: !GetAtt Route53Stack.Outputs.ApiRecordName

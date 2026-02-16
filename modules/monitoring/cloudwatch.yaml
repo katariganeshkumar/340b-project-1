@@ -1,0 +1,149 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: '340B Monitoring Module - CloudWatch Logs and Alarms'
+
+Parameters:
+  Environment:
+    Type: String
+    AllowedValues: [dev, qa, prod]
+    Description: Environment name
+  Region:
+    Type: String
+    Default: us-west-1
+    Description: AWS Region
+  NamingPrefix:
+    Type: String
+    Default: 340b
+    Description: Naming prefix for all resources
+  KMSKeyArn:
+    Type: String
+    Default: ''
+    Description: KMS Key ARN for log encryption (optional)
+  LogRetentionDays:
+    Type: Number
+    Default: 14
+    Description: Log retention in days
+  AlarmEmail:
+    Type: String
+    Default: ''
+    Description: Email for alarm notifications (optional)
+  LoadBalancerArn:
+    Type: String
+    Default: ''
+    Description: ALB ARN for target response time alarm
+  AutoScalingGroupName:
+    Type: String
+    Default: ''
+    Description: ASG name for CPU alarm
+
+Conditions:
+  UseKMS: !Not [!Equals [!Ref KMSKeyArn, '']]
+  CreateAlarms: !Not [!Equals [!Ref AlarmEmail, '']]
+  HasALB: !Not [!Equals [!Ref LoadBalancerArn, '']]
+  HasASG: !Not [!Equals [!Ref AutoScalingGroupName, '']]
+
+Resources:
+  ApplicationLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/340b/${Environment}/application'
+      RetentionInDays: !Ref LogRetentionDays
+      KmsKeyId: !If [UseKMS, !Ref KMSKeyArn, !Ref 'AWS::NoValue']
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamingPrefix}-${Environment}-app-logs'
+        - Key: Environment
+          Value: !Ref Environment
+
+  Alb5xxAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: HasALB
+    Properties:
+      AlarmName: !Sub '${NamingPrefix}-${Environment}-alb-5xx'
+      AlarmDescription: ALB 5XX error count
+      MetricName: HTTPCode_ELB_5XX_Count
+      Namespace: AWS/ApplicationELB
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 5
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: LoadBalancer
+          Value: !Select [1, !Split ['loadbalancer/', !Ref LoadBalancerArn]]
+      TreatMissingData: notBreaching
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamingPrefix}-${Environment}-alb-5xx-alarm'
+
+  AlbTargetResponseTimeAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: HasALB
+    Properties:
+      AlarmName: !Sub '${NamingPrefix}-${Environment}-alb-target-response'
+      AlarmDescription: ALB target response time
+      MetricName: TargetResponseTime
+      Namespace: AWS/ApplicationELB
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 5
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: LoadBalancer
+          Value: !Select [1, !Split ['loadbalancer/', !Ref LoadBalancerArn]]
+      TreatMissingData: notBreaching
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamingPrefix}-${Environment}-alb-response-alarm'
+
+  ASGCPUAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: HasASG
+    Properties:
+      AlarmName: !Sub '${NamingPrefix}-${Environment}-asg-cpu'
+      AlarmDescription: ASG average CPU utilization
+      MetricName: CPUUtilization
+      Namespace: AWS/EC2
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 80
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: AutoScalingGroupName
+          Value: !Ref AutoScalingGroupName
+      TreatMissingData: notBreaching
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamingPrefix}-${Environment}-asg-cpu-alarm'
+
+  SNSAlarmTopic:
+    Type: AWS::SNS::Topic
+    Condition: CreateAlarms
+    Properties:
+      TopicName: !Sub '${NamingPrefix}-${Environment}-alarms'
+      DisplayName: !Sub '340B ${Environment} Alarms'
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamingPrefix}-${Environment}-alarm-topic'
+
+  SNSSubscription:
+    Type: AWS::SNS::Subscription
+    Condition: CreateAlarms
+    Properties:
+      TopicArn: !Ref SNSAlarmTopic
+      Protocol: email
+      Endpoint: !Ref AlarmEmail
+
+Outputs:
+  ApplicationLogGroupName:
+    Description: Application log group name
+    Value: !Ref ApplicationLogGroup
+    Export:
+      Name: !Sub '${NamingPrefix}-${Environment}-ApplicationLogGroupName'
+  AlarmTopicArn:
+    Condition: CreateAlarms
+    Description: SNS topic ARN for alarms
+    Value: !Ref SNSAlarmTopic
+    Export:
+      Name: !Sub '${NamingPrefix}-${Environment}-AlarmTopicArn'

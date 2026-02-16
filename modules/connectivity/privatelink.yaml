@@ -1,0 +1,168 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: '340B Connectivity Module - PrivateLink Endpoint Service and Interface Endpoints'
+
+Parameters:
+  Environment:
+    Type: String
+    AllowedValues: [dev, qa, prod]
+    Description: Environment name
+  Region:
+    Type: String
+    Default: us-west-1
+    Description: AWS Region
+  NamingPrefix:
+    Type: String
+    Default: 340b
+    Description: Naming prefix for all resources
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC ID
+  VPCCidr:
+    Type: String
+    Default: 10.0.0.0/16
+    Description: VPC CIDR for endpoint security group ingress
+  PrivateSubnet1Id:
+    Type: AWS::EC2::Subnet::Id
+    Description: Private subnet 1 for interface endpoints
+  PrivateSubnet2Id:
+    Type: AWS::EC2::Subnet::Id
+    Description: Private subnet 2 for interface endpoints
+  EnableEndpointService:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: Enable endpoint service (requires NLB ARN)
+  NetworkLoadBalancerArn:
+    Type: String
+    Default: ''
+    Description: NLB ARN for endpoint service (required if EnableEndpointService=true)
+  PrivateRouteTableId:
+    Type: String
+    Description: Private route table ID for S3 gateway endpoint
+  InterfaceEndpointServices:
+    Type: CommaDelimitedList
+    Default: 'ecr.api,ecr.dkr,logs,s3,sts'
+    Description: AWS services for interface endpoints (e.g. ecr.api,ecr.dkr,logs,s3,sts)
+
+Conditions:
+  CreateEndpointService: !Equals [!Ref EnableEndpointService, 'true']
+
+Resources:
+  EndpointSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub '${NamingPrefix}-${Environment}-vpc-endpoints-sg'
+      GroupDescription: Security group for VPC interface endpoints
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: !Ref VPCCidr
+          Description: HTTPS from VPC
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamingPrefix}-${Environment}-vpc-endpoints-sg'
+
+  VPCEndpointECRApi:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref VpcId
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.ecr.api'
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      SubnetIds:
+        - !Ref PrivateSubnet1Id
+        - !Ref PrivateSubnet2Id
+      SecurityGroupIds:
+        - !Ref EndpointSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamingPrefix}-${Environment}-vpc-endpoint-ecr-api'
+
+  VPCEndpointECRDkr:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref VpcId
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.ecr.dkr'
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      SubnetIds:
+        - !Ref PrivateSubnet1Id
+        - !Ref PrivateSubnet2Id
+      SecurityGroupIds:
+        - !Ref EndpointSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamingPrefix}-${Environment}-vpc-endpoint-ecr-dkr'
+
+  VPCEndpointLogs:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref VpcId
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.logs'
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      SubnetIds:
+        - !Ref PrivateSubnet1Id
+        - !Ref PrivateSubnet2Id
+      SecurityGroupIds:
+        - !Ref EndpointSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamingPrefix}-${Environment}-vpc-endpoint-logs'
+
+  VPCEndpointS3:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref VpcId
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.s3'
+      VpcEndpointType: Gateway
+      RouteTableIds:
+        - !Ref PrivateRouteTableId
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamingPrefix}-${Environment}-vpc-endpoint-s3'
+
+  VPCEndpointSTS:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref VpcId
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.sts'
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      SubnetIds:
+        - !Ref PrivateSubnet1Id
+        - !Ref PrivateSubnet2Id
+      SecurityGroupIds:
+        - !Ref EndpointSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamingPrefix}-${Environment}-vpc-endpoint-sts'
+
+  EndpointService:
+    Type: AWS::EC2::VPCEndpointService
+    Condition: CreateEndpointService
+    Properties:
+      NetworkLoadBalancerArns:
+        - !Ref NetworkLoadBalancerArn
+      AcceptanceRequired: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamingPrefix}-${Environment}-endpoint-service'
+
+Outputs:
+  EndpointSecurityGroupId:
+    Description: VPC Endpoints Security Group ID
+    Value: !Ref EndpointSecurityGroup
+    Export:
+      Name: !Sub '${NamingPrefix}-${Environment}-EndpointSecurityGroupId'
+  EndpointServiceName:
+    Condition: CreateEndpointService
+    Description: PrivateLink Endpoint Service Name
+    Value: !Sub 'com.amazonaws.vpce.${AWS::Region}.${EndpointService}'
+    Export:
+      Name: !Sub '${NamingPrefix}-${Environment}-EndpointServiceName'

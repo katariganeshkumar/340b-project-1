@@ -1,0 +1,67 @@
+{
+  "Network": {
+    "Environment": "prod",
+    "Region": "us-west-1",
+    "NamingPrefix": "340b",
+    "VPCCidr": "10.2.0.0/16",
+    "PublicSubnet1Cidr": "10.2.1.0/24",
+    "PublicSubnet2Cidr": "10.2.2.0/24",
+    "PrivateSubnet1Cidr": "10.2.10.0/24",
+    "PrivateSubnet2Cidr": "10.2.11.0/24",
+    "AvailabilityZone1": "us-west-1a",
+    "AvailabilityZone2": "us-west-1b",
+    "FlowLogRetentionDays": 90
+  },
+  "Security": {
+    "Environment": "prod",
+    "Region": "us-west-1",
+    "NamingPrefix": "340b"
+  },
+  "Compute": {
+    "Environment": "prod",
+    "Region": "us-west-1",
+    "NamingPrefix": "340b",
+    "InstanceType": "t3.medium",
+    "MinSize": 2,
+    "MaxSize": 10,
+    "DesiredCapacity": 2,
+    "KeyName": ""
+  },
+  "Connectivity": {
+    "Environment": "prod",
+    "Region": "us-west-1",
+    "NamingPrefix": "340b",
+    "TgwRouteDestinationCidr": "",
+    "EnableEndpointService": "false"
+  },
+  "Monitoring": {
+    "Environment": "prod",
+    "Region": "us-west-1",
+    "NamingPrefix": "340b",
+    "LogRetentionDays": 90,
+    "AlarmEmail": ""
+  },
+  "Storage": {
+    "Environment": "prod",
+    "Region": "us-west-1",
+    "NamingPrefix": "340b",
+    "BucketSuffix": "data"
+  },
+  "DNS": {
+    "Environment": "prod",
+    "Region": "us-west-1",
+    "NamingPrefix": "340b",
+    "DomainName": "example.com",
+    "CreateHostedZone": "false",
+    "HostedZoneId": "",
+    "RecordName": "api"
+  },
+  "ACM": {
+    "Environment": "prod",
+    "Region": "us-west-1",
+    "NamingPrefix": "340b",
+    "DomainName": "api.example.com",
+    "SubjectAlternativeNames": "*.api.example.com",
+    "ValidationMethod": "DNS"
+  }
+}

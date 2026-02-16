@@ -1,0 +1,94 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: '340B DNS Module - Route53 Hosted Zone and Records'
+
+Parameters:
+  Environment:
+    Type: String
+    AllowedValues: [dev, qa, prod]
+    Description: Environment name
+  Region:
+    Type: String
+    Default: us-west-1
+    Description: AWS Region
+  NamingPrefix:
+    Type: String
+    Default: 340b
+    Description: Naming prefix for all resources
+  DomainName:
+    Type: String
+    Description: Domain name for hosted zone (e.g. example.com)
+  CreateHostedZone:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+    Description: Create new hosted zone (false = use existing)
+  HostedZoneId:
+    Type: String
+    Default: ''
+    Description: Existing hosted zone ID (if CreateHostedZone=false)
+  LoadBalancerDNSName:
+    Type: String
+    Description: ALB DNS name for A record
+  LoadBalancerHostedZoneId:
+    Type: String
+    Description: ALB hosted zone ID for alias target
+  RecordName:
+    Type: String
+    Default: ''
+    Description: Record name (e.g. api or dev-api for dev-api.example.com)
+
+Conditions:
+  CreateZone: !Equals [!Ref CreateHostedZone, 'true']
+  UseExistingZone: !And [!Equals [!Ref CreateHostedZone, 'false'], !Not [!Equals [!Ref HostedZoneId, '']]]
+  HasRecordName: !Not [!Equals [!Ref RecordName, '']]
+  HasValidZone: !Or [!Condition CreateZone, !Condition UseExistingZone]
+
+Resources:
+  HostedZone:
+    Type: AWS::Route53::HostedZone
+    Condition: CreateZone
+    Properties:
+      Name: !Ref DomainName
+      HostedZoneConfig:
+        Comment: !Sub '340B ${Environment} hosted zone'
+      HostedZoneTags:
+        - Key: Name
+          Value: !Sub '${NamingPrefix}-${Environment}-hosted-zone'
+        - Key: Environment
+          Value: !Ref Environment
+
+  ApiRecord:
+    Type: AWS::Route53::RecordSet
+    Condition: HasValidZone
+    Properties:
+      HostedZoneId: !If [CreateZone, !Ref HostedZone, !Ref HostedZoneId]
+      Name: !Sub
+        - '${Record}.${Domain}'
+        - Record: !If [HasRecordName, !Ref RecordName, !Sub '${Environment}-api']
+          Domain: !Ref DomainName
+      Type: A
+      AliasTarget:
+        DNSName: !Ref LoadBalancerDNSName
+        HostedZoneId: !Ref LoadBalancerHostedZoneId
+        EvaluateTargetHealth: false
+
+Outputs:
+  HostedZoneId:
+    Description: Route53 Hosted Zone ID
+    Value: !If [CreateZone, !Ref HostedZone, !Ref HostedZoneId]
+    Export:
+      Name: !Sub '${NamingPrefix}-${Environment}-HostedZoneId'
+  HostedZoneNameServers:
+    Condition: CreateZone
+    Description: Name servers for domain delegation
+    Value: !Join [',', !GetAtt HostedZone.NameServers]
+    Export:
+      Name: !Sub '${NamingPrefix}-${Environment}-NameServers'
+  ApiRecordName:
+    Description: API record FQDN
+    Value: !Sub
+      - '${Record}.${Domain}'
+      - Record: !If [HasRecordName, !Ref RecordName, !Sub '${Environment}-api']
+        Domain: !Ref DomainName
+    Export:
+      Name: !Sub '${NamingPrefix}-${Environment}-ApiRecordName'

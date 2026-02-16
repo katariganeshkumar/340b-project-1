@@ -1,0 +1,9 @@
+[
+  {"ParameterKey": "Environment", "ParameterValue": "dev"},
+  {"ParameterKey": "Region", "ParameterValue": "us-west-1"},
+  {"ParameterKey": "NamingPrefix", "ParameterValue": "340b"},
+  {"ParameterKey": "VPCCidr", "ParameterValue": "10.0.0.0/16"},
+  {"ParameterKey": "InstanceType", "ParameterValue": "t3.micro"},
+  {"ParameterKey": "TemplateBucket", "ParameterValue": "YOUR-BUCKET-NAME"},
+  {"ParameterKey": "TemplatePrefix", "ParameterValue": "340b-templates"}
+]

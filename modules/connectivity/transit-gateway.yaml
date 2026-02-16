@@ -1,0 +1,46 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: '340B Connectivity Module - Transit Gateway'
+
+Parameters:
+  Environment:
+    Type: String
+    AllowedValues: [dev, qa, prod]
+    Description: Environment name
+  Region:
+    Type: String
+    Default: us-west-1
+    Description: AWS Region
+  NamingPrefix:
+    Type: String
+    Default: 340b
+    Description: Naming prefix for all resources
+  AmazonSideAsn:
+    Type: Number
+    Default: 64512
+    Description: Private ASN for Transit Gateway
+
+Resources:
+  TransitGateway:
+    Type: AWS::EC2::TransitGateway
+    Properties:
+      Description: !Sub '${NamingPrefix}-${Environment} Transit Gateway'
+      AmazonSideAsn: !Ref AmazonSideAsn
+      DefaultRouteTableAssociation: disable
+      DefaultRouteTablePropagation: disable
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamingPrefix}-${Environment}-tgw-${Region}'
+        - Key: Environment
+          Value: !Ref Environment
+
+Outputs:
+  TransitGatewayId:
+    Description: Transit Gateway ID
+    Value: !Ref TransitGateway
+    Export:
+      Name: !Sub '${NamingPrefix}-${Environment}-TransitGatewayId'
+  TransitGatewayArn:
+    Description: Transit Gateway ARN
+    Value: !Sub 'arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:transit-gateway/${TransitGateway}'
+    Export:
+      Name: !Sub '${NamingPrefix}-${Environment}-TransitGatewayArn'

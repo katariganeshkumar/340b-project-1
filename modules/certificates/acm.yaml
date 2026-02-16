@@ -1,0 +1,56 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: '340B Certificates Module - ACM Certificate'
+
+Parameters:
+  Environment:
+    Type: String
+    AllowedValues: [dev, qa, prod]
+    Description: Environment name
+  Region:
+    Type: String
+    Default: us-west-1
+    Description: AWS Region
+  NamingPrefix:
+    Type: String
+    Default: 340b
+    Description: Naming prefix for all resources
+  DomainName:
+    Type: String
+    Description: Primary domain name for certificate
+  SubjectAlternativeNames:
+    Type: CommaDelimitedList
+    Default: ''
+    Description: Additional domain names (SANs) for certificate
+  ValidationMethod:
+    Type: String
+    Default: DNS
+    AllowedValues: [DNS, EMAIL]
+    Description: Certificate validation method
+
+Conditions:
+  HasSANs: !Not [!Equals [!Join ['', !Ref SubjectAlternativeNames], '']]
+
+Resources:
+  Certificate:
+    Type: AWS::CertificateManager::Certificate
+    Properties:
+      DomainName: !Ref DomainName
+      SubjectAlternativeNames: !If [HasSANs, !Ref SubjectAlternativeNames, !Ref 'AWS::NoValue']
+      ValidationMethod: !Ref ValidationMethod
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamingPrefix}-${Environment}-cert'
+        - Key: Environment
+          Value: !Ref Environment
+
+Outputs:
+  CertificateArn:
+    Description: ACM Certificate ARN
+    Value: !Ref Certificate
+    Export:
+      Name: !Sub '${NamingPrefix}-${Environment}-CertificateArn'
+  CertificateDomainName:
+    Description: Certificate domain name
+    Value: !Ref Certificate
+    Export:
+      Name: !Sub '${NamingPrefix}-${Environment}-CertificateDomainName'

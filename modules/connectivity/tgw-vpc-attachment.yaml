@@ -1,0 +1,94 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: '340B Connectivity Module - Transit Gateway VPC Attachment and Routing'
+
+Parameters:
+  Environment:
+    Type: String
+    AllowedValues: [dev, qa, prod]
+    Description: Environment name
+  Region:
+    Type: String
+    Default: us-west-1
+    Description: AWS Region
+  NamingPrefix:
+    Type: String
+    Default: 340b
+    Description: Naming prefix for all resources
+  TransitGatewayId:
+    Type: String
+    Description: Transit Gateway ID
+  PrivateRouteTableId:
+    Type: String
+    Description: Private route table ID for TGW route
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC ID
+  PrivateSubnet1Id:
+    Type: AWS::EC2::Subnet::Id
+    Description: Private subnet 1 for TGW attachment
+  PrivateSubnet2Id:
+    Type: AWS::EC2::Subnet::Id
+    Description: Private subnet 2 for TGW attachment
+  TgwRouteDestinationCidr:
+    Type: String
+    Default: ''
+    Description: Optional CIDR to route via TGW (e.g. 10.1.0.0/16 for on-prem)
+
+Conditions:
+  HasTgwRoute: !Not [!Equals [!Ref TgwRouteDestinationCidr, '']]
+
+Resources:
+  TGWAttachment:
+    Type: AWS::EC2::TransitGatewayVpcAttachment
+    Properties:
+      TransitGatewayId: !Ref TransitGatewayId
+      VpcId: !Ref VpcId
+      SubnetIds:
+        - !Ref PrivateSubnet1Id
+        - !Ref PrivateSubnet2Id
+      Options:
+        DnsSupport: enable
+        Ipv6Support: disable
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamingPrefix}-${Environment}-tgw-attachment-${Region}'
+        - Key: Environment
+          Value: !Ref Environment
+
+  TGWRouteTable:
+    Type: AWS::EC2::TransitGatewayRouteTable
+    Properties:
+      TransitGatewayId: !Ref TransitGatewayId
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamingPrefix}-${Environment}-tgw-rt-${Region}'
+
+  TGWRouteTableAssociation:
+    Type: AWS::EC2::TransitGatewayRouteTableAssociation
+    Properties:
+      TransitGatewayRouteTableId: !Ref TGWRouteTable
+      TransitGatewayAttachmentId: !Ref TGWAttachment
+
+  TGWRoute:
+    Type: AWS::EC2::TransitGatewayRoute
+    Condition: HasTgwRoute
+    Properties:
+      TransitGatewayRouteTableId: !Ref TGWRouteTable
+      DestinationCidrBlock: !Ref TgwRouteDestinationCidr
+      TransitGatewayAttachmentId: !Ref TGWAttachment
+
+  VpcRouteToTGW:
+    Type: AWS::EC2::Route
+    Condition: HasTgwRoute
+    DependsOn: TGWAttachment
+    Properties:
+      RouteTableId: !Ref PrivateRouteTableId
+      DestinationCidrBlock: !Ref TgwRouteDestinationCidr
+      TransitGatewayId: !Ref TransitGatewayId
+
+Outputs:
+  TGWAttachmentId:
+    Description: Transit Gateway VPC Attachment ID
+    Value: !Ref TGWAttachment
+    Export:
+      Name: !Sub '${NamingPrefix}-${Environment}-TGWAttachmentId'

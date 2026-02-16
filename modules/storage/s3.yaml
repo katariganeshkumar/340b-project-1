@@ -1,0 +1,81 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: '340B Storage Module - S3 Bucket with KMS encryption'
+
+Parameters:
+  Environment:
+    Type: String
+    AllowedValues: [dev, qa, prod]
+    Description: Environment name
+  Region:
+    Type: String
+    Default: us-west-1
+    Description: AWS Region
+  NamingPrefix:
+    Type: String
+    Default: 340b
+    Description: Naming prefix for all resources
+  KMSKeyArn:
+    Type: String
+    Default: ''
+    Description: KMS Key ARN for bucket encryption
+  BucketSuffix:
+    Type: String
+    Default: data
+    Description: Bucket name suffix (e.g. data, logs, backups)
+
+Conditions:
+  UseKMS: !Not [!Equals [!Ref KMSKeyArn, '']]
+
+Resources:
+  S3Bucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    Properties:
+      BucketName: !Sub '${NamingPrefix}-${Environment}-${BucketSuffix}-${AWS::AccountId}'
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: !If [UseKMS, aws:kms, AES256]
+              KMSMasterKeyID: !If [UseKMS, !Ref KMSKeyArn, !Ref 'AWS::NoValue']
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamingPrefix}-${Environment}-${BucketSuffix}-bucket'
+        - Key: Environment
+          Value: !Ref Environment
+
+  S3BucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref S3Bucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: EnforceSSL
+            Effect: Deny
+            Principal: '*'
+            Action: 's3:*'
+            Resource:
+              - !GetAtt S3Bucket.Arn
+              - !Sub ['${Arn}/*', {Arn: !GetAtt S3Bucket.Arn}]
+            Condition:
+              Bool:
+                'aws:SecureTransport': false
+
+Outputs:
+  BucketName:
+    Description: S3 Bucket name
+    Value: !Ref S3Bucket
+    Export:
+      Name: !Sub '${NamingPrefix}-${Environment}-${BucketSuffix}-BucketName'
+  BucketArn:
+    Description: S3 Bucket ARN
+    Value: !GetAtt S3Bucket.Arn
+    Export:
+      Name: !Sub '${NamingPrefix}-${Environment}-${BucketSuffix}-BucketArn'
