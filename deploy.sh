@@ -35,7 +35,7 @@ get_param() {
 }
 
 # 1. Network
-echo "[1/11] Deploying Network stack..."
+echo "[1/12] Deploying Network stack..."
 aws cloudformation deploy $AWS_OPTS \
   --template-file "${SCRIPT_DIR}/modules/network/vpc.yaml" \
   --stack-name "${STACK_PREFIX}-network" \
@@ -55,7 +55,7 @@ aws cloudformation deploy $AWS_OPTS \
   --no-fail-on-empty-changeset
 
 # 2. KMS
-echo "[2/11] Deploying KMS stack..."
+echo "[2/12] Deploying KMS stack..."
 aws cloudformation deploy $AWS_OPTS \
   --template-file "${SCRIPT_DIR}/modules/security/kms.yaml" \
   --stack-name "${STACK_PREFIX}-kms" \
@@ -66,7 +66,7 @@ aws cloudformation deploy $AWS_OPTS \
   --no-fail-on-empty-changeset
 
 # 3. Transit Gateway
-echo "[3/11] Deploying Transit Gateway stack..."
+echo "[3/12] Deploying Transit Gateway stack..."
 aws cloudformation deploy $AWS_OPTS \
   --template-file "${SCRIPT_DIR}/modules/connectivity/transit-gateway.yaml" \
   --stack-name "${STACK_PREFIX}-tgw" \
@@ -77,7 +77,7 @@ aws cloudformation deploy $AWS_OPTS \
   --no-fail-on-empty-changeset
 
 # 4. TGW VPC Attachment
-echo "[4/11] Deploying TGW VPC Attachment stack..."
+echo "[4/12] Deploying TGW VPC Attachment stack..."
 VPC_ID=$(aws cloudformation describe-stacks $AWS_OPTS --stack-name "${STACK_PREFIX}-network" --query "Stacks[0].Outputs[?OutputKey=='VpcId'].OutputValue" --output text)
 PRIVATE_SUBNET_1=$(aws cloudformation describe-stacks $AWS_OPTS --stack-name "${STACK_PREFIX}-network" --query "Stacks[0].Outputs[?OutputKey=='PrivateSubnet1Id'].OutputValue" --output text)
 PRIVATE_SUBNET_2=$(aws cloudformation describe-stacks $AWS_OPTS --stack-name "${STACK_PREFIX}-network" --query "Stacks[0].Outputs[?OutputKey=='PrivateSubnet2Id'].OutputValue" --output text)
@@ -99,8 +99,34 @@ aws cloudformation deploy $AWS_OPTS \
     TgwRouteDestinationCidr="$(get_param Connectivity TgwRouteDestinationCidr)" \
   --no-fail-on-empty-changeset
 
-# 5. PrivateLink (Interface Endpoints)
-echo "[5/11] Deploying PrivateLink stack..."
+# 5. Network Firewall
+echo "[5/12] Deploying Network Firewall stack..."
+NAT_GATEWAY_ID=$(aws cloudformation describe-stacks $AWS_OPTS --stack-name "${STACK_PREFIX}-network" --query "Stacks[0].Outputs[?OutputKey=='NATGatewayId'].OutputValue" --output text)
+PUBLIC_SUBNET_1=$(aws cloudformation describe-stacks $AWS_OPTS --stack-name "${STACK_PREFIX}-network" --query "Stacks[0].Outputs[?OutputKey=='PublicSubnet1Id'].OutputValue" --output text)
+
+aws cloudformation deploy $AWS_OPTS \
+  --template-file "${SCRIPT_DIR}/modules/security/network-firewall.yaml" \
+  --stack-name "${STACK_PREFIX}-network-firewall" \
+  --parameter-overrides \
+    Environment="$ENV" \
+    Region="$(get_param Security Region)" \
+    NamingPrefix="$(get_param Security NamingPrefix)" \
+    VpcId="$VPC_ID" \
+    VPCCidr="$(get_param Network VPCCidr)" \
+    PrivateSubnet1Id="$PRIVATE_SUBNET_1" \
+    PrivateSubnet2Id="$PRIVATE_SUBNET_2" \
+    PublicSubnet1Id="$PUBLIC_SUBNET_1" \
+    NATGatewayId="$NAT_GATEWAY_ID" \
+    AvailabilityZone1="$(get_param Network AvailabilityZone1)" \
+    AvailabilityZone2="$(get_param Network AvailabilityZone2)" \
+    PrivateRouteTableId="$PRIVATE_RT" \
+    TransitGatewayId="$TGW_ID" \
+    TgwRouteDestinationCidr="$(get_param Connectivity TgwRouteDestinationCidr)" \
+  --capabilities CAPABILITY_NAMED_IAM \
+  --no-fail-on-empty-changeset
+
+# 6. PrivateLink (Interface Endpoints)
+echo "[6/12] Deploying PrivateLink stack..."
 aws cloudformation deploy $AWS_OPTS \
   --template-file "${SCRIPT_DIR}/modules/connectivity/privatelink.yaml" \
   --stack-name "${STACK_PREFIX}-privatelink" \
@@ -116,8 +142,8 @@ aws cloudformation deploy $AWS_OPTS \
     EnableEndpointService="$(get_param Connectivity EnableEndpointService)" \
   --no-fail-on-empty-changeset
 
-# 6. Compute (ALB + ASG)
-echo "[6/11] Deploying Compute stack..."
+# 7. Compute (ALB + ASG)
+echo "[7/12] Deploying Compute stack..."
 PUBLIC_SUBNET_1=$(aws cloudformation describe-stacks $AWS_OPTS --stack-name "${STACK_PREFIX}-network" --query "Stacks[0].Outputs[?OutputKey=='PublicSubnet1Id'].OutputValue" --output text)
 PUBLIC_SUBNET_2=$(aws cloudformation describe-stacks $AWS_OPTS --stack-name "${STACK_PREFIX}-network" --query "Stacks[0].Outputs[?OutputKey=='PublicSubnet2Id'].OutputValue" --output text)
 ALB_SG=$(aws cloudformation describe-stacks $AWS_OPTS --stack-name "${STACK_PREFIX}-network" --query "Stacks[0].Outputs[?OutputKey=='ALBSecurityGroupId'].OutputValue" --output text)
@@ -146,8 +172,8 @@ aws cloudformation deploy $AWS_OPTS \
   --capabilities CAPABILITY_NAMED_IAM \
   --no-fail-on-empty-changeset
 
-# 7. WAF
-echo "[7/11] Deploying WAF stack..."
+# 8. WAF
+echo "[8/12] Deploying WAF stack..."
 ALB_ARN=$(aws cloudformation describe-stacks $AWS_OPTS --stack-name "${STACK_PREFIX}-compute" --query "Stacks[0].Outputs[?OutputKey=='LoadBalancerArn'].OutputValue" --output text)
 
 aws cloudformation deploy $AWS_OPTS \
@@ -160,8 +186,8 @@ aws cloudformation deploy $AWS_OPTS \
     NamingPrefix="$(get_param Security NamingPrefix)" \
   --no-fail-on-empty-changeset
 
-# 8. Storage
-echo "[8/11] Deploying Storage stack..."
+# 9. Storage
+echo "[9/12] Deploying Storage stack..."
 KMS_ARN=$(aws cloudformation describe-stacks $AWS_OPTS --stack-name "${STACK_PREFIX}-kms" --query "Stacks[0].Outputs[?OutputKey=='KMSKeyArn'].OutputValue" --output text)
 
 aws cloudformation deploy $AWS_OPTS \
@@ -175,8 +201,8 @@ aws cloudformation deploy $AWS_OPTS \
     BucketSuffix="$(get_param Storage BucketSuffix)" \
   --no-fail-on-empty-changeset
 
-# 9. Monitoring
-echo "[9/11] Deploying Monitoring stack..."
+# 10. Monitoring
+echo "[10/12] Deploying Monitoring stack..."
 ASG_NAME=$(aws cloudformation describe-stacks $AWS_OPTS --stack-name "${STACK_PREFIX}-compute" --query "Stacks[0].Outputs[?OutputKey=='AutoScalingGroupName'].OutputValue" --output text)
 
 aws cloudformation deploy $AWS_OPTS \
@@ -193,46 +219,46 @@ aws cloudformation deploy $AWS_OPTS \
     AutoScalingGroupName="$ASG_NAME" \
   --no-fail-on-empty-changeset
 
-# 10. ACM (optional - if DomainName is set)
-DOMAIN=$(get_param DNS DomainName)
-if [[ -n "$DOMAIN" && "$DOMAIN" != "null" ]]; then
-  echo "[10/11] Deploying ACM stack..."
-  aws cloudformation deploy $AWS_OPTS \
-    --template-file "${SCRIPT_DIR}/modules/certificates/acm.yaml" \
-    --stack-name "${STACK_PREFIX}-acm" \
-    --parameter-overrides \
-      Environment="$ENV" \
-      Region="$(get_param ACM Region)" \
-      NamingPrefix="$(get_param ACM NamingPrefix)" \
-      DomainName="$(get_param ACM DomainName)" \
-      SubjectAlternativeNames="$(get_param ACM SubjectAlternativeNames)" \
-      ValidationMethod="$(get_param ACM ValidationMethod)" \
-    --no-fail-on-empty-changeset
-fi
+# 11. ACM (optional - if DomainName is set)
+# DOMAIN=$(get_param DNS DomainName)
+# if [[ -n "$DOMAIN" && "$DOMAIN" != "null" ]]; then
+#   echo "[11/12] Deploying ACM stack..."
+#   aws cloudformation deploy $AWS_OPTS \
+#     --template-file "${SCRIPT_DIR}/modules/certificates/acm.yaml" \
+#     --stack-name "${STACK_PREFIX}-acm" \
+#     --parameter-overrides \
+#       Environment="$ENV" \
+#       Region="$(get_param ACM Region)" \
+#       NamingPrefix="$(get_param ACM NamingPrefix)" \
+#       DomainName="$(get_param ACM DomainName)" \
+#       SubjectAlternativeNames="$(get_param ACM SubjectAlternativeNames)" \
+#       ValidationMethod="$(get_param ACM ValidationMethod)" \
+#     --no-fail-on-empty-changeset
+# fi
 
-# 11. Route53 (optional - if DomainName is set and zone is available)
-CREATE_ZONE=$(get_param DNS CreateHostedZone)
-EXISTING_ZONE=$(get_param DNS HostedZoneId)
-if [[ -n "$DOMAIN" && "$DOMAIN" != "null" && ( "$CREATE_ZONE" == "true" || ( -n "$EXISTING_ZONE" && "$EXISTING_ZONE" != "null" ) ) ]]; then
-  echo "[11/11] Deploying Route53 stack..."
-  ALB_DNS=$(aws cloudformation describe-stacks $AWS_OPTS --stack-name "${STACK_PREFIX}-compute" --query "Stacks[0].Outputs[?OutputKey=='LoadBalancerDNSName'].OutputValue" --output text)
-  ALB_ZONE=$(aws cloudformation describe-stacks $AWS_OPTS --stack-name "${STACK_PREFIX}-compute" --query "Stacks[0].Outputs[?OutputKey=='LoadBalancerHostedZoneId'].OutputValue" --output text)
-
-  aws cloudformation deploy $AWS_OPTS \
-    --template-file "${SCRIPT_DIR}/modules/dns/route53.yaml" \
-    --stack-name "${STACK_PREFIX}-route53" \
-    --parameter-overrides \
-      Environment="$ENV" \
-      Region="$(get_param DNS Region)" \
-      NamingPrefix="$(get_param DNS NamingPrefix)" \
-      DomainName="$DOMAIN" \
-      CreateHostedZone="$(get_param DNS CreateHostedZone)" \
-      HostedZoneId="$(get_param DNS HostedZoneId)" \
-      LoadBalancerDNSName="$ALB_DNS" \
-      LoadBalancerHostedZoneId="$ALB_ZONE" \
-      RecordName="$(get_param DNS RecordName)" \
-    --no-fail-on-empty-changeset
-fi
+# 12. Route53 (optional - if DomainName is set and zone is available)
+# CREATE_ZONE=$(get_param DNS CreateHostedZone)
+# EXISTING_ZONE=$(get_param DNS HostedZoneId)
+# if [[ -n "$DOMAIN" && "$DOMAIN" != "null" && ( "$CREATE_ZONE" == "true" || ( -n "$EXISTING_ZONE" && "$EXISTING_ZONE" != "null" ) ) ]]; then
+#   echo "[12/12] Deploying Route53 stack..."
+#   ALB_DNS=$(aws cloudformation describe-stacks $AWS_OPTS --stack-name "${STACK_PREFIX}-compute" --query "Stacks[0].Outputs[?OutputKey=='LoadBalancerDNSName'].OutputValue" --output text)
+#   ALB_ZONE=$(aws cloudformation describe-stacks $AWS_OPTS --stack-name "${STACK_PREFIX}-compute" --query "Stacks[0].Outputs[?OutputKey=='LoadBalancerHostedZoneId'].OutputValue" --output text)
+#
+#   aws cloudformation deploy $AWS_OPTS \
+#     --template-file "${SCRIPT_DIR}/modules/dns/route53.yaml" \
+#     --stack-name "${STACK_PREFIX}-route53" \
+#     --parameter-overrides \
+#       Environment="$ENV" \
+#       Region="$(get_param DNS Region)" \
+#       NamingPrefix="$(get_param DNS NamingPrefix)" \
+#       DomainName="$DOMAIN" \
+#       CreateHostedZone="$(get_param DNS CreateHostedZone)" \
+#       HostedZoneId="$(get_param DNS HostedZoneId)" \
+#       LoadBalancerDNSName="$ALB_DNS" \
+#       LoadBalancerHostedZoneId="$ALB_ZONE" \
+#       RecordName="$(get_param DNS RecordName)" \
+#     --no-fail-on-empty-changeset
+# fi
 
 echo ""
 echo "=== Deployment complete ==="

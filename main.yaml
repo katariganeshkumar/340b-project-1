@@ -191,7 +191,31 @@ Resources:
         PrivateRouteTableId: !GetAtt NetworkStack.Outputs.PrivateRouteTableId
         TgwRouteDestinationCidr: !Ref TgwRouteDestinationCidr
 
-  # 8. PrivateLink Stack
+  # 8. Network Firewall Stack
+  NetworkFirewallStack:
+    Type: AWS::CloudFormation::Stack
+    DependsOn:
+      - NetworkStack
+      - TGWStack
+    Properties:
+      TemplateURL: !Sub 'https://${TemplateBucket}.s3.${AWS::Region}.amazonaws.com/${TemplatePrefix}/modules/security/network-firewall.yaml'
+      Parameters:
+        Environment: !Ref Environment
+        Region: !Ref Region
+        NamingPrefix: !Ref NamingPrefix
+        VpcId: !GetAtt NetworkStack.Outputs.VpcId
+        VPCCidr: !Ref VPCCidr
+        PrivateSubnet1Id: !GetAtt NetworkStack.Outputs.PrivateSubnet1Id
+        PrivateSubnet2Id: !GetAtt NetworkStack.Outputs.PrivateSubnet2Id
+        PublicSubnet1Id: !GetAtt NetworkStack.Outputs.PublicSubnet1Id
+        NATGatewayId: !GetAtt NetworkStack.Outputs.NATGatewayId
+        AvailabilityZone1: !Ref AvailabilityZone1
+        AvailabilityZone2: !Ref AvailabilityZone2
+        PrivateRouteTableId: !GetAtt NetworkStack.Outputs.PrivateRouteTableId
+        TransitGatewayId: !GetAtt TGWStack.Outputs.TransitGatewayId
+        TgwRouteDestinationCidr: !Ref TgwRouteDestinationCidr
+
+  # 9. PrivateLink Stack (after Network Firewall overrides private subnet routing)
   PrivateLinkStack:
     Type: AWS::CloudFormation::Stack
     DependsOn: NetworkStack
@@ -208,7 +232,7 @@ Resources:
         PrivateRouteTableId: !GetAtt NetworkStack.Outputs.PrivateRouteTableId
         EnableEndpointService: 'false'
 
-  # 9. Storage Stack
+  # 10. Storage Stack
   StorageStack:
     Type: AWS::CloudFormation::Stack
     DependsOn: KMSStack

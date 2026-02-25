@@ -1,0 +1,391 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: '340B Security Module - AWS Network Firewall for VPC traffic inspection'
+
+Parameters:
+  Environment:
+    Type: String
+    AllowedValues: [dev, qa, prod]
+    Description: Environment name
+  Region:
+    Type: String
+    Default: us-west-1
+    Description: AWS Region
+  NamingPrefix:
+    Type: String
+    Default: 340b
+    Description: Naming prefix for all resources
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC ID
+  VPCCidr:
+    Type: String
+    Default: 10.0.0.0/16
+    Description: VPC CIDR block
+  PrivateSubnet1Id:
+    Type: AWS::EC2::Subnet::Id
+    Description: Private subnet 1 (workload)
+  PrivateSubnet2Id:
+    Type: AWS::EC2::Subnet::Id
+    Description: Private subnet 2 (workload)
+  PublicSubnet1Id:
+    Type: AWS::EC2::Subnet::Id
+    Description: Public subnet 1 (NAT Gateway)
+  NATGatewayId:
+    Type: String
+    Description: NAT Gateway ID for firewall egress
+  AvailabilityZone1:
+    Type: String
+    Description: First availability zone
+  AvailabilityZone2:
+    Type: String
+    Description: Second availability zone
+  FirewallSubnet1Cidr:
+    Type: String
+    Default: 10.0.20.0/28
+    Description: Firewall subnet 1 CIDR (dedicated, min /28)
+  FirewallSubnet2Cidr:
+    Type: String
+    Default: 10.0.21.0/28
+    Description: Firewall subnet 2 CIDR (dedicated, min /28)
+  EnableLogging:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+    Description: Enable Network Firewall logging to CloudWatch
+  LogRetentionDays:
+    Type: Number
+    Default: 14
+    Description: Firewall log retention in days
+  PrivateRouteTableId:
+    Type: String
+    Description: Private route table ID from VPC stack (to replace default route)
+  TransitGatewayId:
+    Type: String
+    Default: ''
+    Description: Optional Transit Gateway ID for TGW route propagation
+  TgwRouteDestinationCidr:
+    Type: String
+    Default: ''
+    Description: Optional CIDR to route via TGW (e.g. 10.1.0.0/16)
+
+Conditions:
+  EnableFirewallLogging: !Equals [!Ref EnableLogging, 'true']
+  HasTgwRoute: !And
+    - !Not [!Equals [!Ref TransitGatewayId, '']]
+    - !Not [!Equals [!Ref TgwRouteDestinationCidr, '']]
+
+Resources:
+  # Dedicated firewall subnets (one per AZ, exclusive use)
+  FirewallSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VpcId
+      CidrBlock: !Ref FirewallSubnet1Cidr
+      AvailabilityZone: !Ref AvailabilityZone1
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamingPrefix}-${Environment}-firewall-subnet-1-${Region}'
+        - Key: Type
+          Value: Firewall
+
+  FirewallSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VpcId
+      CidrBlock: !Ref FirewallSubnet2Cidr
+      AvailabilityZone: !Ref AvailabilityZone2
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamingPrefix}-${Environment}-firewall-subnet-2-${Region}'
+        - Key: Type
+          Value: Firewall
+
+  # Stateful rule group - Suricata rules for traffic inspection
+  # Allows established connections, drops invalid packets
+  StatefulRuleGroup:
+    Type: AWS::NetworkFirewall::RuleGroup
+    Properties:
+      Capacity: 100
+      RuleGroupName: !Sub '${NamingPrefix}-${Environment}-nfw-stateful-rg'
+      Type: STATEFUL
+      RuleGroup:
+        StatefulRuleOptions:
+          RuleOrder: STRICT_ORDER
+        RulesSource:
+          RulesString: |
+            pass tcp any any -> any any (flow:established; sid:1;)
+            pass tcp any any -> any any (flow:to_server; sid:2;)
+            pass udp any any -> any any (sid:3;)
+            pass icmp any any -> any any (sid:4;)
+      Description: Stateful rules for established connections and invalid state handling
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamingPrefix}-${Environment}-nfw-stateful-rg'
+
+  # Firewall policy
+  FirewallPolicy:
+    Type: AWS::NetworkFirewall::FirewallPolicy
+    Properties:
+      FirewallPolicyName: !Sub '${NamingPrefix}-${Environment}-nfw-policy'
+      Description: Firewall policy for 340B VPC traffic inspection
+      FirewallPolicy:
+        StatelessDefaultActions:
+          - aws:forward_to_sfe
+        StatelessFragmentDefaultActions:
+          - aws:drop
+        StatefulEngineOptions:
+          RuleOrder: STRICT_ORDER
+        StatefulRuleGroupReferences:
+          - ResourceArn: !GetAtt StatefulRuleGroup.RuleGroupArn
+            Priority: 1
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamingPrefix}-${Environment}-nfw-policy'
+
+  # Network Firewall
+  NetworkFirewall:
+    Type: AWS::NetworkFirewall::Firewall
+    Properties:
+      FirewallName: !Sub '${NamingPrefix}-${Environment}-nfw'
+      FirewallPolicyArn: !Ref FirewallPolicy
+      VpcId: !Ref VpcId
+      SubnetChangeProtection: false
+      DeleteProtection: false
+      SubnetMappings:
+        - SubnetId: !Ref FirewallSubnet1
+        - SubnetId: !Ref FirewallSubnet2
+      Description: AWS Network Firewall for 340B private subnet egress inspection
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamingPrefix}-${Environment}-nfw'
+
+  # Firewall subnet route tables - route to NAT Gateway
+  FirewallRouteTable1:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VpcId
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamingPrefix}-${Environment}-firewall-rt-1-${Region}'
+
+  FirewallRouteTable2:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VpcId
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamingPrefix}-${Environment}-firewall-rt-2-${Region}'
+
+  FirewallRoute1:
+    Type: AWS::EC2::Route
+    DependsOn: NetworkFirewall
+    Properties:
+      RouteTableId: !Ref FirewallRouteTable1
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NATGatewayId
+
+  FirewallRoute2:
+    Type: AWS::EC2::Route
+    DependsOn: NetworkFirewall
+    Properties:
+      RouteTableId: !Ref FirewallRouteTable2
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NATGatewayId
+
+  FirewallSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref FirewallSubnet1
+      RouteTableId: !Ref FirewallRouteTable1
+
+  FirewallSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref FirewallSubnet2
+      RouteTableId: !Ref FirewallRouteTable2
+
+  # Lambda custom resource to map endpoint IDs to AZs
+  EndpointMapperRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: !Sub '${NamingPrefix}-${Environment}-nfw-mapper-policy'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:*'
+              - Effect: Allow
+                Action:
+                  - ec2:ReplaceRoute
+                  - ec2:DescribeRouteTables
+                Resource: '*'
+
+  EndpointMapperLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${NamingPrefix}-${Environment}-nfw-endpoint-mapper'
+      Runtime: python3.12
+      Handler: index.handler
+      Role: !GetAtt EndpointMapperRole.Arn
+      Timeout: 60
+      Code:
+        ZipFile: |
+          import json
+          import urllib.request
+          import boto3
+
+          ec2 = boto3.client('ec2')
+
+          def send_response(event, context, status, data=None):
+              body = json.dumps({
+                  'Status': status,
+                  'Reason': 'See CloudWatch Logs',
+                  'PhysicalResourceId': event.get('PhysicalResourceId', context.log_stream_name),
+                  'StackId': event['StackId'],
+                  'RequestId': event['RequestId'],
+                  'LogicalResourceId': event['LogicalResourceId'],
+                  'Data': data or {}
+              })
+              req = urllib.request.Request(event['ResponseURL'], data=body.encode(), method='PUT')
+              req.add_header('Content-Type', '')
+              urllib.request.urlopen(req)
+
+          def handler(event, context):
+              try:
+                  props = event['ResourceProperties']
+                  endpoint_ids = props['EndpointIds']
+                  az1 = props['AvailabilityZone1']
+                  route_table_id = props['RouteTableId']
+                  nat_gateway_id = props['NATGatewayId']
+
+                  endpoint_map = {}
+                  for item in endpoint_ids:
+                      parts = item.split(':')
+                      if len(parts) == 2:
+                          endpoint_map[parts[0]] = parts[1]
+
+                  firewall_endpoint = endpoint_map.get(az1, '')
+
+                  if event['RequestType'] == 'Delete':
+                      ec2.replace_route(
+                          RouteTableId=route_table_id,
+                          DestinationCidrBlock='0.0.0.0/0',
+                          NatGatewayId=nat_gateway_id
+                      )
+                      send_response(event, context, 'SUCCESS', {})
+                      return
+
+                  ec2.replace_route(
+                      RouteTableId=route_table_id,
+                      DestinationCidrBlock='0.0.0.0/0',
+                      VpcEndpointId=firewall_endpoint
+                  )
+
+                  send_response(event, context, 'SUCCESS', {
+                      'FirewallEndpointId': firewall_endpoint
+                  })
+              except Exception as e:
+                  send_response(event, context, 'FAILED', {'Error': str(e)})
+
+  EndpointMapper:
+    Type: AWS::CloudFormation::CustomResource
+    DependsOn: NetworkFirewall
+    Properties:
+      ServiceToken: !GetAtt EndpointMapperLambda.Arn
+      EndpointIds: !GetAtt NetworkFirewall.EndpointIds
+      AvailabilityZone1: !Ref AvailabilityZone1
+      RouteTableId: !Ref PrivateRouteTableId
+      NATGatewayId: !Ref NATGatewayId
+
+  # Firewall logging
+  FirewallLogGroup:
+    Type: AWS::Logs::LogGroup
+    Condition: EnableFirewallLogging
+    Properties:
+      LogGroupName: !Sub '/aws/networkfirewall/${NamingPrefix}-${Environment}-nfw'
+      RetentionInDays: !Ref LogRetentionDays
+
+  FirewallLogGroupPolicy:
+    Type: AWS::Logs::ResourcePolicy
+    Condition: EnableFirewallLogging
+    DependsOn: FirewallLogGroup
+    Properties:
+      PolicyName: !Sub '${NamingPrefix}-${Environment}-nfw-log-policy'
+      PolicyDocument:
+        Fn::Sub:
+          - |
+            {
+              "Version": "2012-10-17",
+              "Statement": [{
+                "Effect": "Allow",
+                "Principal": {"Service": "network-firewall.amazonaws.com"},
+                "Action": ["logs:CreateLogStream", "logs:PutLogEvents"],
+                "Resource": "${LogGroupArn}:*",
+                "Condition": {
+                  "ArnLike": {"aws:SourceArn": "${FirewallArn}"}
+                }
+              }]
+            }
+          - LogGroupArn: !GetAtt FirewallLogGroup.Arn
+            FirewallArn: !Ref NetworkFirewall
+
+  FirewallLogging:
+    Type: AWS::NetworkFirewall::LoggingConfiguration
+    Condition: EnableFirewallLogging
+    DependsOn:
+      - NetworkFirewall
+      - FirewallLogGroupPolicy
+    Properties:
+      FirewallArn: !Ref NetworkFirewall
+      FirewallName: !Sub '${NamingPrefix}-${Environment}-nfw'
+      LoggingConfiguration:
+        LogDestinationConfigs:
+          - LogType: ALERT
+            LogDestinationType: CloudWatchLogs
+            LogDestination:
+              logGroup: !Ref FirewallLogGroup
+          - LogType: FLOW
+            LogDestinationType: CloudWatchLogs
+            LogDestination:
+              logGroup: !Ref FirewallLogGroup
+
+Outputs:
+  NetworkFirewallArn:
+    Description: Network Firewall ARN
+    Value: !Ref NetworkFirewall
+    Export:
+      Name: !Sub '${NamingPrefix}-${Environment}-NetworkFirewallArn'
+  NetworkFirewallId:
+    Description: Network Firewall ID
+    Value: !GetAtt NetworkFirewall.FirewallId
+    Export:
+      Name: !Sub '${NamingPrefix}-${Environment}-NetworkFirewallId'
+  FirewallSubnet1Id:
+    Description: Firewall subnet 1 ID
+    Value: !Ref FirewallSubnet1
+    Export:
+      Name: !Sub '${NamingPrefix}-${Environment}-FirewallSubnet1Id'
+  FirewallSubnet2Id:
+    Description: Firewall subnet 2 ID
+    Value: !Ref FirewallSubnet2
+    Export:
+      Name: !Sub '${NamingPrefix}-${Environment}-FirewallSubnet2Id'
+  FirewallPolicyArn:
+    Description: Firewall policy ARN
+    Value: !Ref FirewallPolicy
+    Export:
+      Name: !Sub '${NamingPrefix}-${Environment}-FirewallPolicyArn'

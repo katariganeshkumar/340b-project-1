@@ -352,6 +352,11 @@ Outputs:
     Value: !Ref PrivateRouteTable
     Export:
       Name: !Sub '${NamingPrefix}-${Environment}-PrivateRouteTableId'
+  NATGatewayId:
+    Description: NAT Gateway ID for Network Firewall routing
+    Value: !Ref NATGateway
+    Export:
+      Name: !Sub '${NamingPrefix}-${Environment}-NATGatewayId'
   PublicSubnetRouteTableId:
     Description: Public route table ID
     Value: !Ref PublicRouteTable
